@@ -74,8 +74,8 @@ def elbow(L):
 
 
 def em(rng, x, K, restarts=4, iters=200):
-    """Full-covariance Gaussian mixture by EM: (log-likelihood, means, weights, covariances, responsibilities)."""
-    best, d = None, x.shape[1]
+    """Largest log-likelihood of a full-covariance Gaussian mixture over the EM restarts."""
+    best, d = -np.inf, x.shape[1]
     for _ in range(restarts):
         m, S, p = x[rng.choice(len(x), K, replace=False)], np.array([np.cov(x.T)] * K), np.full(K, 1 / K)
         for _ in range(iters):
@@ -91,15 +91,13 @@ def em(rng, x, K, restarts=4, iters=200):
             nk = r.sum(0) + 1e-10
             p, m = nk / len(x), r.T @ x / nk[:, None]
             S = np.array([(r[:, j, None] * (x - m[j])).T @ (x - m[j]) / nk[j] + 1e-6 * np.eye(d) for j in range(K)])
-        if best is None or ll > best[0]:
-            best = (ll, m, p, S, r)
+        best = max(best, ll)
     return best
 
 
 def gmm_bic(rng, x):
-    fits = [em(rng, x, K) for K in range(1, KFIT + 1)]
-    bic = [-2 * f[0] + (6 * K - 1) * np.log(len(x)) for K, f in enumerate(fits, 1)]
-    return int(np.argmin(bic)) + 1, fits[int(np.argmin(bic))], np.array(bic)
+    """Number of components of a full-covariance Gaussian mixture chosen by BIC over K = 1..KFIT."""
+    return int(np.argmin([-2 * em(rng, x, K) + (6 * K - 1) * np.log(len(x)) for K in range(1, KFIT + 1)])) + 1
 
 
 def data(dgp, n, rep):
@@ -130,7 +128,7 @@ def job(a):
                  re={k: e['e'] for k, e in ev.items()})
         draws = ev[K]['runs'][0]['draws'] + ev[K]['runs'][1]['draws']
         Lhat = np.array([quantizer(M, k)[0] for k in range(1, KMAX + 1)])
-        o.update(K_km=elbow(Lhat), Lhat=Lhat, K_gmm=gmm_bic(rng, x)[0])
+        o.update(K_km=elbow(Lhat), Lhat=Lhat, K_gmm=gmm_bic(rng, x))
     else:
         draws = sum((run(M, 2000, lloyd_start(M, K, s), split_merge=False, temper=False, seed=s)['draws'] for s in (0, 1)), [])
     cal = calibrate(M, draws, K)
