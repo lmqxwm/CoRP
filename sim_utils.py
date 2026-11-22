@@ -48,14 +48,15 @@ def gen(rng, dgp, n):
 
 
 def population(dgp, seed=1):
-    """L*_K (K = 1..9, 2 x 10^5 draws), c = geometric mean of the two cost gaps around K†, gamma, and theta* = (z*, w*)
-    at K† from 10^6 draws (best of 30 Lloyd starts), with the spread of the 30 optima as a (D4) check."""
+    """L*_K (K = 1..9, 2 x 10^5 draws), c = lambda_0 x geometric mean of the two cost gaps around K†, gamma = gap between
+    the two smallest values of lambda_0 L*_K + cK, and theta* = (z*, w*) at K† from 10^6 draws (best of 30 Lloyd
+    starts), with the spread of the 30 optima as a (D4) check."""
     rng = np.random.default_rng(seed)
     M = Model(gen(rng, dgp, 200000), 2)
     L = np.array([quantizer(M, k, n_init=5)[0] for k in range(1, 10)])
     K, g = KDAG[dgp], -np.diff(L)
-    c = float(np.sqrt(g[K - 2] * g[K - 1]))
-    crit = np.sort(L[:KFIT] + c * np.arange(1, KFIT + 1))
+    c = float(LAM0 * np.sqrt(g[K - 2] * g[K - 1]))
+    crit = np.sort(LAM0 * L[:KFIT] + c * np.arange(1, KFIT + 1))
     Mb = Model(gen(rng, dgp, 10 ** 6), 2)
     sols = sorted((quantizer(Mb, K, n_init=1, seed=s) for s in range(30)), key=lambda t: t[0])
     z = sols[0][1]
@@ -107,7 +108,7 @@ def data(dgp, n, rep):
 
 def make_model(x, c):
     n = len(x)
-    return Model(x, 2, Exp(n * LAM0), penalty(n * LAM0 * c), GaussianAtoms(np.zeros(2), 10.0), Dirichlet(1.0), K_max=KMAX)
+    return Model(x, 2, Exp(n * LAM0), penalty(n * c), GaussianAtoms(np.zeros(2), 10.0, 50.0), Dirichlet(1.0), K_max=KMAX)
 
 
 def job(a):
@@ -204,7 +205,7 @@ def _seq(x, i, j, rest, logu, to_i, draw, G, B0, u0, kappa0, nu0):
 def mfm(rng, x, a=-np.log(0.9), sweeps=3000, burn=1000, sm=3, starts=(1, 10), gamma=1.0, kappa0=0.01, K_max=30):
     """Bayesian Gaussian mixture with a prior on the number of components (mixture of finite mixtures, Miller and Harrison
     2018): Pi(K) ∝ exp(-a K) on K = 1..K_max (the default a is the Geometric(0.1) prior of their package BayesianMixtures.jl,
-    a = n lambda_0 c is the count prior of CoRP), weights Dir(gamma, ..., gamma) given K, and on each component the
+    a = n c is the count prior of CoRP), weights Dir(gamma, ..., gamma) given K, and on each component the
     normal-inverse-Wishart prior Sigma_k ~ IW(nu0 = d + 2, Psi0 = Cov(x) / 4), mu_k | Sigma_k ~ N(x_bar, Sigma_k / kappa0).
     One chain per entry of starts, started at k-means with that many clusters.  Each sweep is one telescoping sweep
     (Fruehwirth-Schnatter, Malsiner-Walli and Gruen 2021: parameters, K, weights, allocations) followed by sm
@@ -278,7 +279,7 @@ def mfm_job(a):
     CoRP.  The count posterior and its mode; the conditional draws are kept for rep 0."""
     dgp, n, rep, P = a
     rng, x = data(dgp, n, rep)
-    r = mfm(rng, x) if P is None else mfm(rng, x, n * LAM0 * P['c'])
+    r = mfm(rng, x) if P is None else mfm(rng, x, n * P['c'])
     return dict(dgp=dgp, n=n, rep=rep, **(r if rep == 0 else dict(K=r['K'], pK=r['pK'], pK_chain=r['pK_chain'])))
 
 

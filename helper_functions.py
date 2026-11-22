@@ -11,6 +11,7 @@ from scipy.integrate import quad
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 from scipy.special import betaln, gammaln
+from scipy.stats import chi2
 
 
 # ---------------------------------------------------------------- tolerance laws: Lam = -log F and its derivative
@@ -48,26 +49,40 @@ class Weibull:
         return self.shape / self.scale * (t / self.scale) ** (self.shape - 1)
 
 
-# ---------------------------------------------------------------- priors (log densities)
+# ---------------------------------------------------------------- priors (log densities; classes, so that a Model can be sent to worker processes)
 
-def penalty(c):
+class penalty:
     """log Pi(K) = -c K."""
-    return lambda K: -c * K
+
+    def __init__(self, c):
+        self.c = c
+
+    def __call__(self, K):
+        return -self.c * K
 
 
-def poisson(mu):
+class poisson:
     """K - 1 ~ Poisson(mu)."""
-    return lambda K: (K - 1) * np.log(mu) - gammaln(K)
+
+    def __init__(self, mu):
+        self.mu = mu
+
+    def __call__(self, K):
+        return (K - 1) * np.log(self.mu) - gammaln(K)
 
 
 class GaussianAtoms:
-    """z_j iid N(mean, sd^2 I_d)."""
+    """z_j iid N(mean, sd^2 I_d) truncated to the ball ||z_j - mean|| <= rho (rho = inf: untruncated)."""
 
-    def __init__(self, mean, sd):
-        self.mean, self.sd = np.atleast_1d(np.asarray(mean, float)), float(sd)
+    def __init__(self, mean, sd, rho=np.inf):
+        self.mean, self.sd, self.rho = np.atleast_1d(np.asarray(mean, float)), float(sd), float(rho)
 
     def __call__(self, z):
-        return -0.5 * ((z - self.mean) ** 2).sum() / self.sd ** 2 - z.size * np.log(self.sd * np.sqrt(2 * np.pi))
+        r2 = ((z - self.mean) ** 2).sum(-1)
+        if np.any(r2 > self.rho ** 2):
+            return -np.inf
+        return (-0.5 * r2.sum() / self.sd ** 2 - z.size * np.log(self.sd * np.sqrt(2 * np.pi))
+                - r2.size * chi2.logcdf((self.rho / self.sd) ** 2, z.shape[-1]))
 
 
 class Dirichlet:
@@ -96,7 +111,7 @@ class Model:
         self.p, self.radius, self.K_max = p, radius, K_max
         sbar = self.x.std(0).mean()
         guide = GaussianAtoms(self.q @ self.x, 2 * sbar)
-        self.prior_K = prior_K or (lambda K: 0.0)
+        self.prior_K = prior_K or penalty(0.0)
         self.prior_z = prior_z or guide
         self.prior_w = prior_w or Dirichlet(1.0)
         if isinstance(self.prior_z, GaussianAtoms):
